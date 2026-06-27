@@ -1,0 +1,101 @@
+name: Discord Notify (Mimi)
+
+on:
+  pull_request:
+    types: [opened, closed, ready_for_review, review_requested]
+  pull_request_review:
+    types: [submitted]
+  pull_request_review_comment:
+    types: [created]
+  issue_comment:
+    types: [created]
+
+jobs:
+  notify:
+    runs-on: ubuntu-latest
+    # Mimi bot 自身のアクションは無視
+    if: |
+      github.actor != 'n06s-mimi-bot[bot]' &&
+      github.actor != 'github-actions[bot]'
+
+    steps:
+      - name: Build and send Discord message
+        env:
+          DISCORD_WEBHOOK_URL: ${{ secrets.DISCORD_WEBHOOK_URL }}
+          EVENT_NAME: ${{ github.event_name }}
+          ACTION: ${{ github.event.action }}
+          REPO: ${{ github.repository }}
+          PR_NUMBER: ${{ github.event.pull_request.number || github.event.issue.number }}
+          PR_TITLE: ${{ github.event.pull_request.title || github.event.issue.title }}
+          PR_URL: ${{ github.event.pull_request.html_url || github.event.issue.html_url }}
+          ACTOR: ${{ github.actor }}
+          REVIEW_STATE: ${{ github.event.review.state }}
+          REVIEW_BODY: ${{ github.event.review.body }}
+          REVIEW_URL: ${{ github.event.review.html_url }}
+          COMMENT_BODY: ${{ github.event.comment.body || github.event.review_comment.body }}
+          COMMENT_URL: ${{ github.event.comment.html_url || github.event.review_comment.html_url }}
+        run: |
+          set -e
+
+          if [[ "$EVENT_NAME" == "issue_comment" && -z "${{ github.event.issue.pull_request.url }}" ]]; then
+            echo "Issue comment (not PR), skipping"
+            exit 0
+          fi
+
+          case "$EVENT_NAME/$ACTION" in
+            pull_request/opened)
+              PREFIX="🆕 PR がオープンされたよ"
+              ;;
+            pull_request/closed)
+              if [[ "${{ github.event.pull_request.merged }}" == "true" ]]; then
+                PREFIX="🎉 PR がマージされたよ"
+              else
+                PREFIX="🚫 PR がクローズされたよ"
+              fi
+              ;;
+            pull_request/ready_for_review)
+              PREFIX="✅ PR がレビュー準備完了になったよ"
+              ;;
+            pull_request/review_requested)
+              PREFIX="👀 レビューリクエストが届いたよ"
+              ;;
+            pull_request_review/submitted)
+              case "$REVIEW_STATE" in
+                approved)     PREFIX="✅ Approve されたよ" ;;
+                changes_requested) PREFIX="🔄 修正リクエストが来たよ" ;;
+                *)            PREFIX="💬 レビューコメントが届いたよ" ;;
+              esac
+              ;;
+            pull_request_review_comment/created)
+              PREFIX="🔍 コードへのコメントが届いたよ"
+              ;;
+            issue_comment/created)
+              PREFIX="💬 コメントが届いたよ"
+              ;;
+            *)
+              PREFIX="🔔 GitHub 通知"
+              ;;
+          esac
+
+          LINK="${COMMENT_URL:-${REVIEW_URL:-$PR_URL}}"
+          MSG="${PREFIX}\n\`${REPO}\` PR #${PR_NUMBER}: **${PR_TITLE}**\n👤 ${ACTOR}"
+
+          if [[ -n "$COMMENT_BODY" ]]; then
+            TRUNCATED=$(echo "$COMMENT_BODY" | head -c 300)
+            if [[ "${#COMMENT_BODY}" -gt 300 ]]; then
+              TRUNCATED="${TRUNCATED}..."
+            fi
+            MSG="${MSG}\n\`\`\`\n${TRUNCATED}\n\`\`\`"
+          elif [[ -n "$REVIEW_BODY" && "$REVIEW_BODY" != "null" ]]; then
+            TRUNCATED=$(echo "$REVIEW_BODY" | head -c 300)
+            MSG="${MSG}\n\`\`\`\n${TRUNCATED}\n\`\`\`"
+          fi
+
+          MSG="${MSG}\n🔗 ${LINK}"
+
+          curl -s -X POST "$DISCORD_WEBHOOK_URL" \
+            -H "Content-Type: application/json" \
+            -d "{\"content\": $(echo -e "$MSG" | jq -Rs .)}"
+
+          echo "Discord notification sent!"
+
