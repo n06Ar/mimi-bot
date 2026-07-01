@@ -16,6 +16,46 @@ Developer → GitHub PR → GitHub Actions → Discord Webhook
                                          GitHub API (Review)
 ```
 
+## ネットワーク構成図
+
+```mermaid
+graph TB
+    subgraph Dev["Developer"]
+        DevPC[開発者 PC]
+    end
+
+    subgraph GHCloud["GitHub Cloud"]
+        Repo[対象リポジトリ<br/>n06Ar/*]
+        Actions[GitHub Actions<br/>discord-notify.yml]
+        API[GitHub REST/GraphQL API]
+    end
+
+    subgraph DiscordCloud["Discord Cloud"]
+        PRCh[PR 通知チャンネル]
+        MainCh[メインチャンネル]
+    end
+
+    subgraph VPS["VPS (mimi-bot ホスト)"]
+        MimiCC[Claude Code<br/>Mimi Bot プロセス<br/>plugin:discord]
+        GhAsMimi[gh-as-mimi.sh<br/>GitHub App 認証]
+    end
+
+    DevPC -- "PR open / push /<br/>review / comment" --> Repo
+    Repo -- "イベント発火" --> Actions
+    Actions -- "webhook POST<br/>(curl, DISCORD_WEBHOOK_URL)" --> PRCh
+    PRCh -- "通知検知<br/>(Discord Gateway)" --> MimiCC
+    MimiCC -- "diff 取得<br/>(gh pr diff)" --> API
+    MimiCC -- "レビュー投稿<br/>(Approve / Request Changes)" --> GhAsMimi
+    GhAsMimi -- "GitHub App トークンで実行" --> API
+    Actions -- "レビュー結果通知" --> PRCh
+    MimiCC <-. "会話ミラーリング" .-> MainCh
+```
+
+- **GitHub Actions → Discord**: `discord-notify.yml` が `DISCORD_WEBHOOK_URL`（Incoming Webhook）に直接 `curl` で POST する。中間サーバーは経由しない。
+- **Discord → Mimi Bot**: Claude Code が Discord プラグイン経由でチャンネルを購読し、通知メッセージを検知する（`.claude/rules/github.md` の auto-review フロー）。
+- **Mimi Bot → GitHub**: 読み取りは通常の `gh` コマンド、書き込み（レビュー投稿・コメント）は GitHub App 認証を挟む `~/.claude/shells/gh-as-mimi.sh` を必ず経由する。
+- 詳細な PR レビューのシーケンスは [`local/review-flow.mmd`](local/review-flow.mmd) を参照。
+
 ## セットアップ
 
 ### 1. GitHub App の作成
@@ -102,7 +142,6 @@ mimi-bot/
 └── .gitignore
 ```
 
-## 拡張版
+## カスタマイズ
 
-個人用の拡張版として [luna-bot](https://github.com/n06Ar/luna-bot)（private）があります。
 キャラクターや機能を追加したい場合はこの mimi-bot を fork してください。
